@@ -38,6 +38,8 @@ class CocoDetectionDataset(Dataset):
         iscrowd = []
         masks = []
         for a in anns:
+            if a.get("iscrowd", 0):
+                continue
             x, y, w, h = a["bbox"]
             if w <= 1 or h <= 1:
                 continue

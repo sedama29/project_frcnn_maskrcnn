@@ -114,7 +114,7 @@ pip install matplotlib numpy pillow tqdm pycocotools
 
 ---
 
-### 6) Test imports (login node is OK for this only)
+### 6) Test imports (on the login node)
 
 ```bash
 conda activate maskrcnn
@@ -122,18 +122,16 @@ python -c "import torch; print('torch', torch.__version__, 'CUDA build', torch.v
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 ```
 
-**Real GPU check** must be on a **GPU node** (next step)—not the login node.
-
 ---
 
-### 7) Interactive GPU check (recommended once)
+### 7) Check that the GPU works (pick what matches your access)
 
-Pick a partition you are allowed to use (**`gpul40q`** or **`gpua30q`**):
+Some schools **do not** give you a GPU on the login node—you must use an interactive compute session (**§7B**).  
+Others **explicitly allow GPU on the login node** for your class. If that is you, use **§7A** and you can **skip §7B**.
+
+#### 7A — GPU check on the login node (if your admins said login has GPU)
 
 ```bash
-srun -p gpul40q --gres=gpu:1 --cpus-per-task=4 --mem=16G -t 01:00:00 --pty bash
-# if that fails, try: -p gpua30q
-
 module load cuda/12.3
 nvidia-smi
 
@@ -141,6 +139,27 @@ source ~/.bashrc
 conda activate maskrcnn
 python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
 ```
+
+If **`CUDA available: True`** here, your environment is fine. For **long** training, **`sbatch`** (step 8) is still best when you can use it: it reserves a node cleanly and avoids hogging a shared login machine.
+
+#### 7B — GPU check via interactive job (if login has no GPU / standard HPC)
+
+Only if **`nvidia-smi`** on login fails or shows no GPU:
+
+```bash
+srun -p gpul40q --gres=gpu:1 --cpus-per-task=4 --mem=16G -t 01:00:00 --pty bash
+# if that fails, try: -p gpua30q
+
+module load cuda/12.3
+nvidia-smi
+source ~/.bashrc
+conda activate maskrcnn
+python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
+```
+python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
+
+python -c "import torch; print(torch.cuda.is_available())"
+
 
 If **`CUDA available: False`**, fix PyTorch install (§10) before long training.
 
@@ -227,6 +246,31 @@ python scripts/rpn_proposal_analysis.py \
   --topk 100 300 1000 \
   --iou 0.5 0.7 0.9
 ```
+
+### Export tables & checklist for the PDF (no LaTeX required)
+
+After the steps above (figures + RPN optional but recommended), generate **Markdown / LaTeX snippets / CSV** and a **submission checklist**:
+
+```bash
+cd ~/project_frcnn_maskrcnn
+conda activate maskrcnn
+python scripts/export_report_tables.py
+```
+
+**Creates `outputs/report/`:**
+
+| File | Use |
+|------|-----|
+| **`report_narrative_draft.md`** | **Full outline + draft prose** (abstract, intro, method, setup, results, RPN, analysis, conclusion). Auto-fills AP/epochs from metrics; **`[EDIT: ...]`** tags mark what you must personalize. **Edit this file** and merge with tables/figures into your final PDF. |
+| **`report_tables.md`** | Copy tables into Word / Google Docs → export PDF |
+| **`report_tables.tex`** | Paste tabular blocks into LaTeX / Overleaf |
+| **`metrics_summary.csv`** | Excel-friendly numbers |
+| **`rpn_recall_table.csv`** | RPN recall (only if `rpn_recall.json` exists) |
+| **`REPORT_CHECKLIST.txt`** | Submission checklist + paths |
+
+Default inputs: `outputs/frcnn/metrics.json`, `outputs/maskrcnn/metrics.json`, `outputs/frcnn/rpn_recall.json`. Override with `--frcnn_metrics`, `--maskrcnn_metrics`, `--rpn_json`, `--output_dir` if needed.
+
+Re-run **`export_report_tables.py`** after training (or after new metrics) to refresh numbers; your **edited** narrative can stay in a **copy** if you do not want it overwritten—in that case save your version as e.g. `my_report.md` outside `outputs/report/` or disable overwriting by copying the draft aside first.
 
 ---
 

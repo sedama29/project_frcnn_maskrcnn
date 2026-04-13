@@ -1,0 +1,244 @@
+================================================================================
+DETAILED EXPLANATION: train_frcnn.py, train_maskrcnn.py, and train_common.py
+================================================================================
+Location: scripts/train_frcnn.py, scripts/train_maskrcnn.py, scripts/train_common.py
+
+These files work together. The two "train_*.py" files are thin entry points; almost
+all shared logic lives in train_common.py.
+
+
+--------------------------------------------------------------------------------
+1. BIG PICTURE
+--------------------------------------------------------------------------------
+
+- train_frcnn.py
+    Trains Faster R-CNN (object detection: bounding boxes + class labels only).
+
+- train_maskrcnn.py
+    Trains Mask R-CNN (detection + instance segmentation: boxes + pixel masks).
+
+Both:
+    - Read a COCO-style subset from disk (--data_root).
+    - Use torchvision pretrained models on COCO (DEFAULT weights).
+    - Optimize with SGD + StepLR scheduler.
+    - Each epoch: train one pass, then run official-style COCO evaluation (pycocotools).
+    - Save metrics.json, best_model.pt, last_model.pt under --output_dir.
+
+
+--------------------------------------------------------------------------------
+2. train_frcnn.py (line by line, conceptually)
+--------------------------------------------------------------------------------
+
+Imports:
+    argparse, Path          -> command-line arguments and paths.
+    torch                   -> device, tensors.
+    fasterrcnn_resnet50_fpn -> torchvision detection model API.
+    FasterRCNN_ResNet50_FPN_Weights.DEFAULT -> load COCO-pretrained weights.
+    build_loaders, run_training -> from train_common.py.
+
+main():
+
+    (A) Argument parser
+        --data_root (required)
+            Root folder that must contain:
+              <data_root>/train2017/
+              <data_root>/val2017/
+              <data_root>/annotations/instances_train2017_subset.json
+              <data_root>/annotations/instances_val2017_subset.json
+
+        --epochs (default 10)
+            How many full passes over the training set.
+
+        --batch_size (default 2)
+            Images per minibatch during training (GPU memory limits this).
+
+        --lr (default 0.005)
+            SGD learning rate. Slurm/README often use 0.001 for stability.
+
+        --num_workers (default 2)
+            DataLoader worker processes for loading images in parallel.
+
+        --output_dir (default outputs/frcnn)
+            Where metrics.json and .pt checkpoints are written.
+
+    (B) Device
+        cuda if torch.cuda.is_available() else cpu.
+        On the cluster GPU node, you expect cuda.
+
+    (C) build_loaders(..., include_masks=False)
+        Faster R-CNN does not need ground-truth masks for training in this setup.
+        Dataset still loads boxes and category_id from JSON; masks are not loaded
+        (saves memory and time).
+
+    (D) Model
+        fasterrcnn_resnet50_fpn(weights=DEFAULT)
+        Architecture (high level):
+          - Backbone: ResNet-50 extracts feature maps.
+          - FPN: multi-scale features for small/large objects.
+          - RPN: proposes candidate regions.
+          - RoI heads: classify and refine boxes.
+        The pretrained head expects COCO category ids as in your annotation file.
+
+    (E) Optimizer and scheduler
+        SGD on all parameters that require gradients, lr=args.lr, momentum=0.9,
+        weight_decay=0.0005 (standard for detection fine-tuning).
+
+        StepLR: every 3 epochs, multiply learning rate by 0.1 (gamma).
+
+    (F) run_training(..., iou_types=["bbox"])
+        Only bounding-box COCO metrics are computed (AP, AP50, AP75, APs, APm, APl).
+
+
+--------------------------------------------------------------------------------
+3. train_maskrcnn.py (how it differs from train_frcnn.py)
+--------------------------------------------------------------------------------
+
+Almost identical structure to train_frcnn.py. Differences:
+
+    (A) Model
+        maskrcnn_resnet50_fpn(weights=MaskRCNN_ResNet50_FPN_Weights.DEFAULT)
+        Adds a parallel branch that predicts a small binary mask per region
+        (RoI Align + conv layers). That is why instance segmentation is possible.
+
+    (B) build_loaders(..., include_masks=True)
+        For each annotation, train_common loads a pixel mask via pycocotools
+        coco.annToMask(a). The target dict includes key "masks" with shape
+        [num_objects, H, W], uint8, as required by torchvision Mask R-CNN.
+
+    (C) run_training(..., iou_types=["bbox", "segm"])
+        After each epoch, evaluation runs twice:
+          - bbox: detection AP on boxes.
+          - segm: segmentation AP on RLE-encoded predicted masks.
+        segm evaluation is slower than bbox-only.
+
+Default --output_dir is outputs/maskrcnn instead of outputs/frcnn.
+
+
+--------------------------------------------------------------------------------
+4. train_common.py — shared pieces (detailed)
+--------------------------------------------------------------------------------
+
+4.1 CocoDetectionDataset
+    PyTorch Dataset: one sample = one image + one "target" dictionary.
+
+    __getitem__:
+      - Loads image as RGB PIL -> tensor [3, H, W] in [0,1] via torchvision.transforms.functional.to_tensor.
+      - Skips crowd annotations (iscrowd != 0) — standard for instance training.
+      - Skips degenerate boxes (width or height <= 1 pixel).
+      - Boxes stored as [x1, y1, x2, y2] in absolute pixel coordinates (xyxy).
+      - labels = COCO category_id (integers as in JSON; matches pretrained COCO head).
+      - target also has image_id, area, iscrowd tensors for COCO-style evaluation.
+
+    If an image has no valid annotations after filtering:
+      Empty tensors are returned (0 boxes). torchvision detection supports empty targets.
+
+    If include_masks is True:
+      Stacks instance masks from annToMask; shape [N, H, W], uint8.
+
+4.2 collate_fn
+    Detection models need a list of images of different sizes per batch.
+    Default PyTorch batching cannot stack them; collate_fn returns:
+      (tuple of images, tuple of targets) — the standard pattern for torchvision detection.
+
+4.3 train_one_epoch
+    model.train()
+    For each batch:
+      - Move images and targets to device.
+      - loss_dict = model(images, targets)  # training forward returns losses.
+      - loss = sum of all loss terms (RPN + box + class, and for Mask R-CNN + mask loss).
+      - zero_grad, backward, optimizer.step.
+    Returns mean loss scalar for logging.
+
+4.4 evaluate_coco
+    model.eval(), torch.inference_mode().
+    For each validation image:
+      - outputs = model(images)  # inference forward returns dicts with boxes, scores, labels,
+        and for Mask R-CNN also masks.
+
+    Builds a list of COCO-style detection dicts:
+      - bbox mode: image_id, category_id, bbox [x, y, w, h] in COCO format, score.
+      - segm mode: same plus segmentation as RLE (pycocotools mask.encode on thresholded mask).
+
+    If there are zero detections across the whole val set, returns zeros for AP metrics.
+
+    Loads results into coco_gt.loadRes(results) and runs COCOeval with iou_type
+    "bbox" or "segm". summarize() prints the familiar AP table to stdout; stats[0:6]
+    are stored in metrics.json as AP, AP50, AP75, APs, APm, APl.
+
+4.5 build_loaders
+    Fixed relative paths under data_root:
+      train: train2017 + instances_train2017_subset.json
+      val:   val2017   + instances_val2017_subset.json
+    Validation DataLoader uses batch_size=1 (common for variable-size detection eval).
+
+4.6 run_training
+    For epoch = 1 .. epochs:
+      - train_one_epoch -> training loss.
+      - scheduler.step()  (learning rate decay).
+      - For each iou_type in ["bbox"] or ["bbox","segm"]:
+            evaluate_coco -> metrics prefixed bbox_ or segm_ in the log row.
+      - Appends row to history list; writes metrics.json.
+      - If bbox_AP improved vs best so far, saves best_model.pt (state_dict only).
+      - Always saves last_model.pt after each epoch.
+
+    Note: "best" is keyed on bbox_AP even when segm is evaluated; you still get
+    segm metrics in metrics.json every epoch.
+
+
+--------------------------------------------------------------------------------
+5. WHAT FILES APPEAR IN --output_dir
+--------------------------------------------------------------------------------
+
+metrics.json
+    List of per-epoch records: loss, bbox_* metrics, and for Mask R-CNN segm_* too,
+    plus epoch_time_sec.
+
+best_model.pt
+    torch.save(model.state_dict(), ...) at the epoch with highest bbox AP so far.
+
+last_model.pt
+    state_dict after the latest epoch (for resuming or reporting "final" weights).
+
+
+--------------------------------------------------------------------------------
+6. HOW TO RUN (from project root)
+--------------------------------------------------------------------------------
+
+Faster R-CNN:
+  python scripts/train_frcnn.py --data_root data/coco_subset --epochs 10 \
+    --batch_size 2 --lr 0.001 --num_workers 2 --output_dir outputs/frcnn
+
+Mask R-CNN:
+  python scripts/train_maskrcnn.py --data_root data/coco_subset --epochs 10 \
+    --batch_size 2 --lr 0.001 --num_workers 2 --output_dir outputs/maskrcnn
+
+Slurm scripts in the repo run equivalent commands after activating conda and
+loading CUDA.
+
+
+--------------------------------------------------------------------------------
+7. Report export (after training)
+--------------------------------------------------------------------------------
+
+scripts/export_report_tables.py reads outputs/frcnn/metrics.json and
+outputs/maskrcnn/metrics.json (and optionally outputs/frcnn/rpn_recall.json),
+then writes outputs/report/report_tables.md, report_narrative_draft.md
+(editable abstract/intro/method/results/analysis/conclusion with [EDIT:] tags),
+report_tables.tex, metrics_summary.csv, rpn_recall_table.csv (if RPN JSON exists),
+and REPORT_CHECKLIST.txt. Run: python scripts/export_report_tables.py
+Re-running overwrites the report/ folder; keep a copy of your edited narrative if needed.
+
+
+--------------------------------------------------------------------------------
+8. COMMON ISSUES (not logic bugs, but operational)
+--------------------------------------------------------------------------------
+
+- CUDA out of memory: lower --batch_size to 1.
+- NaN loss: lower --lr (e.g. 0.0005); Mask R-CNN can be more sensitive.
+- DataLoader errors on cluster: try --num_workers 0.
+- Wrong paths: data_root must match the folder layout in section 2(A).
+
+
+================================================================================
+END OF FILE
+================================================================================
