@@ -223,7 +223,7 @@ loading CUDA.
 scripts/export_report_tables.py reads outputs/frcnn/metrics.json and
 outputs/maskrcnn/metrics.json (and optionally outputs/frcnn/rpn_recall.json),
 then writes outputs/report/report_tables.md, report_narrative_draft.md
-(editable abstract/intro/method/results/analysis/conclusion with [EDIT:] tags),
+(first-person draft; trim or merge into your PDF),
 report_tables.tex, metrics_summary.csv, rpn_recall_table.csv (if RPN JSON exists),
 and REPORT_CHECKLIST.txt. Run: python scripts/export_report_tables.py
 Re-running overwrites the report/ folder; keep a copy of your edited narrative if needed.

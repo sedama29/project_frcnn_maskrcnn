@@ -209,17 +209,27 @@ python scripts/build_coco_subset.py \
   --seed 42
 ```
 
-Then continue from **§8**.
+Then continue from **§8**. When training is done, use **Report: full workflow** (below) for figures, RPN analysis, and PDF export.
 
 ---
 
-## After training (same env)
+## Report: full workflow for the PDF (step-by-step)
+
+Do this **after** both trainings finish and you have **`outputs/frcnn/metrics.json`** and **`outputs/maskrcnn/metrics.json`**. Work on the cluster (or copy outputs home and run Python there).
+
+**Step 1 — Confirm training outputs**
+
+- `outputs/frcnn/best_model.pt`, `outputs/frcnn/metrics.json`
+- `outputs/maskrcnn/best_model.pt`, `outputs/maskrcnn/metrics.json`
+
+**Step 2 — Qualitative figures (assignment figures + captions)**
+
+From the project root, with **`conda activate maskrcnn`**:
 
 ```bash
 cd ~/project_frcnn_maskrcnn
 conda activate maskrcnn
 
-# Figures — Faster R-CNN
 python scripts/visualize_predictions.py \
   --data_root data/coco_subset \
   --model_type frcnn \
@@ -228,7 +238,6 @@ python scripts/visualize_predictions.py \
   --num_images 8 \
   --score_thresh 0.5
 
-# Figures — Mask R-CNN
 python scripts/visualize_predictions.py \
   --data_root data/coco_subset \
   --model_type maskrcnn \
@@ -236,8 +245,13 @@ python scripts/visualize_predictions.py \
   --output_dir outputs/figures/maskrcnn \
   --num_images 8 \
   --score_thresh 0.5
+```
 
-# RPN proposal recall (Part I-D)
+PNG files appear under **`outputs/figures/frcnn/`** and **`outputs/figures/maskrcnn/`**. In your PDF, add **captions** (correct detection, false positive, mislocalization, missed small object) as the rubric asks.
+
+**Step 3 — RPN proposal recall (Part I-D)**
+
+```bash
 python scripts/rpn_proposal_analysis.py \
   --data_root data/coco_subset \
   --ann_json data/coco_subset/annotations/instances_val2017_subset.json \
@@ -247,9 +261,9 @@ python scripts/rpn_proposal_analysis.py \
   --iou 0.5 0.7 0.9
 ```
 
-### Export tables & checklist for the PDF (no LaTeX required)
+This writes **`outputs/frcnn/rpn_recall.json`**. Use it for recall-vs-IoU and recall-vs-top-k tables in the report.
 
-After the steps above (figures + RPN optional but recommended), generate **Markdown / LaTeX snippets / CSV** and a **submission checklist**:
+**Step 4 — Generate tables, narrative draft, checklist**
 
 ```bash
 cd ~/project_frcnn_maskrcnn
@@ -257,20 +271,58 @@ conda activate maskrcnn
 python scripts/export_report_tables.py
 ```
 
-**Creates `outputs/report/`:**
+**Step 5 — What appears in `outputs/report/`**
 
-| File | Use |
-|------|-----|
-| **`report_narrative_draft.md`** | **Full outline + draft prose** (abstract, intro, method, setup, results, RPN, analysis, conclusion). Auto-fills AP/epochs from metrics; **`[EDIT: ...]`** tags mark what you must personalize. **Edit this file** and merge with tables/figures into your final PDF. |
-| **`report_tables.md`** | Copy tables into Word / Google Docs → export PDF |
-| **`report_tables.tex`** | Paste tabular blocks into LaTeX / Overleaf |
-| **`metrics_summary.csv`** | Excel-friendly numbers |
-| **`rpn_recall_table.csv`** | RPN recall (only if `rpn_recall.json` exists) |
-| **`REPORT_CHECKLIST.txt`** | Submission checklist + paths |
+| File | What to do with it |
+|------|---------------------|
+| **`report_narrative_draft.md`** | First-person draft (abstract → conclusion) with AP and epoch counts filled from `metrics.json`. Use as the **spine** of your write-up: trim length, drop the italic note if you want, insert your figure/table references. |
+| **`report_tables.md`** | Copy each **Markdown table** into Word or Google Docs (or convert). These are your **quantitative results** sections. |
+| **`report_tables.tex`** | Optional: paste into LaTeX/Overleaf if you write in LaTeX. |
+| **`metrics_summary.csv`** | Optional: open in Excel to build your own tables or charts. |
+| **`rpn_recall_table.csv`** | Present only if Step 3 ran; use for Part I-D tables. |
+| **`REPORT_CHECKLIST.txt`** | Walk through every line before submit: abstract, methodology depth, Slurm logs, repo link, etc. |
 
-Default inputs: `outputs/frcnn/metrics.json`, `outputs/maskrcnn/metrics.json`, `outputs/frcnn/rpn_recall.json`. Override with `--frcnn_metrics`, `--maskrcnn_metrics`, `--rpn_json`, `--output_dir` if needed.
+**Step 6 — Assemble the final PDF**
 
-Re-run **`export_report_tables.py`** after training (or after new metrics) to refresh numbers; your **edited** narrative can stay in a **copy** if you do not want it overwritten—in that case save your version as e.g. `my_report.md` outside `outputs/report/` or disable overwriting by copying the draft aside first.
+1. Open a blank document (Word / Google Docs / LaTeX).
+2. Paste or merge **`report_narrative_draft.md`** content (fix headings to match your template if needed).
+3. Paste tables from **`report_tables.md`** (or rebuild from **`metrics_summary.csv`**).
+4. Insert **figures** from **`outputs/figures/`**; add **numbered captions**.
+5. Attach or reference **training logs**: copy **`logs/*.out`** (and `.err` if useful) into an appendix or zip.
+6. Mention **subset creation**: `build_coco_subset.py`, **3k/500**, seed **42** (or whatever you used).
+7. Export **one PDF** per assignment instructions; include **name and student ID**.
+
+**Step 7 — Copy off the cluster (from your laptop)**
+
+```bash
+scp -r YOUR_USER@login.cradle.utrgv.edu:~/project_frcnn_maskrcnn/outputs ./coco_outputs
+```
+
+(On Windows OpenSSH, add **`-O`** to `scp` if your course guide says so.)
+
+**Inputs to `export_report_tables.py` (defaults)**
+
+- `outputs/frcnn/metrics.json`
+- `outputs/maskrcnn/metrics.json`
+- `outputs/frcnn/rpn_recall.json` (optional; Step 3)
+
+**Override paths if needed:**
+
+```bash
+python scripts/export_report_tables.py \
+  --frcnn_metrics outputs/frcnn/metrics.json \
+  --maskrcnn_metrics outputs/maskrcnn/metrics.json \
+  --rpn_json outputs/frcnn/rpn_recall.json \
+  --output_dir outputs/report
+```
+
+**Re-running the export script**
+
+Each run **overwrites** everything under **`outputs/report/`**. If you already edited **`report_narrative_draft.md`**, copy it to e.g. **`~/my_report_draft.md`** before running **`export_report_tables.py`** again.
+
+**Rubric cross-check (short)**
+
+See **§11 Report checklist** below for architecture, losses, RPN discussion, tradeoffs, and deliverables the grader expects—the **`REPORT_CHECKLIST.txt`** file repeats this with file paths.
 
 ---
 
