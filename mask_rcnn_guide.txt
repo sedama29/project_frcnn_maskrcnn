@@ -1,0 +1,624 @@
+Mask R-CNN on UTRGV HPC: Step-by-Step Run Guide
+====================================================
+
+Note for this course repo (COCO case study):
+--------------------------------------------
+The Python files named in "Project Files" below (dataset.py, train.py, …) describe the
+professor's Penn-Fudan reference layout. This GitHub project instead uses
+`scripts/train_frcnn.py`, `scripts/train_maskrcnn.py`, and `data/coco_subset/`.
+You should still follow the SAME HPC practices here: Miniconda, Python 3.10, PyTorch
+`cu121` wheels, GPU partition (`gpul40q` or whatever your account uses), test CUDA on
+an interactive GPU node, and `dos2unix` before `sbatch`. See README.md for COCO paths.
+
+Purpose
+-------
+This guide explains the full workflow to run the Mask R-CNN project files on the UTRGV HPC, starting from local file transfer, HPC login, Miniconda setup, PyTorch/CUDA verification, interactive testing on a GPU node, SLURM batch submission, troubleshooting, and downloading outputs back to the local machine.
+
+Project Files
+-------------
+This project uses the following core files:
+
+1. dataset.py
+   - Builds the Penn-Fudan dataset.
+   - Reads RGB images and instance masks.
+   - Creates boxes, labels, masks, area, image_id, and iscrowd.
+   - Builds train/validation DataLoaders.
+
+2. model.py
+   - Builds the Mask R-CNN model.
+   - Supports both:
+       * training from scratch
+       * optional COCO pretrained initialization
+
+3. train.py
+   - Main training script.
+   - Parses command-line arguments.
+   - Builds data loaders and the model.
+   - Runs training and validation loops.
+   - Saves checkpoints, loss curves, and sample predictions.
+
+4. utils.py
+   - Helper functions for:
+       * seed setting
+       * moving targets to device
+       * training one epoch
+       * validation
+       * checkpoint saving
+       * plotting losses
+       * visualizing sample predictions
+
+5. run_train.slurm
+   - Batch script for SLURM job submission on the GPU partition.
+
+
+Part A. Prepare Files on the Local Machine
+==========================================
+
+1. Open a local terminal / PowerShell.
+2. Go to the folder that contains your project files.
+
+Windows PowerShell example:
+---------------------------
+cd D:\HPC_UTRGV_Test
+cd C:\Users\manoj\Documents\HPC_UTRGV
+
+3. Copy project files to the HPC.
+
+Example:
+--------
+scp -r maskrcnn_project_HPC/* hansapanidrodrigo@login.cradle.utrgv.edu:/home/hansapanidrodrigo/mask_R_CNN/
+
+Copying a Zip file:
+--------
+scp "maskrcnn_project_HPC.zip" kavyapushadapu01@login.cradle.utrgv.edu:/home/kavyapushadapu01/mask_R_CNN
+
+To unzip please type in HPC
+--------
+unzip "maskrcnn_project_HPC 1.zip"
+
+Notes:
+------
+- Run the above command on the LOCAL machine, not on the HPC.
+- Make sure the destination folder exists on the HPC, or create it after login.
+- If the path contains spaces, use quotes.
+
+
+Part B. Log in to the HPC
+=========================
+
+From local terminal:
+--------------------
+ssh hansapanidrodrigo@login.cradle.utrgv.edu
+
+After login:
+------------
+mkdir -p ~/mask_R_CNN
+cd ~/mask_R_CNN
+ls (or Get-ChildItem)
+
+
+Part C. Unzip the Dataset
+=========================
+
+If PennFudanPed.zip is already inside the project folder:
+---------------------------------------------------------
+unzip PennFudanPed.zip
+
+Check dataset contents:
+-----------------------
+ls PennFudanPed
+ls PennFudanPed/PNGImages
+ls PennFudanPed/PedMasks
+
+
+Part D. Check Basic Cluster Environment
+=======================================
+
+On the HPC login node:
+----------------------
+which python3
+python3 --version
+module avail
+module list
+
+Important:
+----------
+- The login node is fine for file management, environment setup, package installation, and syntax checks.
+- The login node is NOT the place to test CUDA/GPU availability.
+
+
+Part E. Why the Original venv Approach Failed
+=============================================
+
+You initially tried to use:
+---------------------------
+python3 -m venv vision_env
+
+This created an old Python environment based on Python 3.6.8.
+That environment caused several issues:
+- old PyTorch build
+- torchvision.tv_tensors import issue
+- GPU architecture mismatch on L40S
+- CUDA incompatibility
+
+Conclusion:
+-----------
+Use Miniconda instead of the old Python 3.6 virtual environment.
+
+
+Part F. Install Miniconda
+=========================
+
+Go to your home directory:
+--------------------------
+cd ~
+
+Download Miniconda:
+-------------------
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+
+If wget fails, try:
+-------------------
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+
+Run installer:
+--------------
+bash Miniconda3-latest-Linux-x86_64.sh
+
+During installation:
+--------------------
+- Press Enter to continue through the text.
+- Type yes to accept the license.
+- Install to the default location, for example:
+  /home/hansapanidrodrigo/miniconda3
+- Type yes when asked to initialize Miniconda.
+
+Reload shell:
+-------------
+source ~/.bashrc
+
+Check conda:
+------------
+conda --version
+
+
+Part G. Fix Conda Terms of Service Error
+========================================
+
+If you see:
+-----------
+CondaToSNonInteractiveError
+
+Run:
+----
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+
+Part H. Create the Conda Environment
+====================================
+
+Create Python 3.10 environment:
+-------------------------------
+conda create -n maskrcnn python=3.10 -y
+
+Activate environment:
+---------------------
+cd mask_R_CNN/ (Make sure to be inside your right folder)
+conda activate maskrcnn
+
+Check Python version:
+---------------------
+python --version
+
+Expected:
+---------
+Python 3.10.x
+
+
+Part I. Install Correct PyTorch / TorchVision Build
+===================================================
+
+Important:
+----------
+Do NOT use the generic install:
+    pip install torch torchvision torchaudio
+because that may install a CUDA build incompatible with the HPC driver.
+
+The L40S node showed driver support around CUDA 12.4, so the compatible build used here was cu121.
+
+If you need to clean old versions first:
+----------------------------------------
+pip uninstall -y torch torchvision torchaudio
+pip cache purge
+
+Install the working version:
+----------------------------
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+Install supporting packages:
+----------------------------
+pip install matplotlib numpy pillow tqdm
+
+Why these are needed:
+---------------------
+- matplotlib: plotting loss curves and prediction images
+- numpy: numerical processing
+- pillow: image handling
+- tqdm: optional progress utilities
+
+
+Part J. Verify the Environment on the Login Node
+================================================
+
+Activate environment if needed:
+-------------------------------
+source ~/.bashrc
+conda activate maskrcnn
+
+Check versions:
+---------------
+python -c "import torch; print(torch.__version__)"
+python -c "import torch; print('torch CUDA:', torch.version.cuda)"
+python -c "import torchvision; print(torchvision.__version__)"
+
+Check torchvision tv_tensors:
+-----------------------------
+python -c "from torchvision.tv_tensors import Image, BoundingBoxes, Mask; print('tv_tensors works')"
+
+Check syntax:
+-------------
+cd ~/mask_R_CNN
+python -m py_compile dataset.py model.py train.py utils.py
+
+If there is no output:
+----------------------
+That means syntax is okay.
+
+
+Part K. Request an Interactive GPU Node
+=======================================
+
+This is the correct place to test CUDA and run quick experiments.
+
+Request a GPU node:
+-------------------
+srun -p gpul40q --gres=gpu:1 --cpus-per-task=4 --mem=16G -t 01:00:00 --pty bash
+
+After allocation:
+-----------------
+hostname
+nvidia-smi
+
+Move to project folder and activate environment:
+------------------------------------------------
+cd ~/mask_R_CNN
+source ~/.bashrc
+conda activate maskrcnn
+
+
+Part L. Verify CUDA on the GPU Node
+===================================
+
+Run:
+----
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+python -c "import torch; print('CUDA version:', torch.version.cuda)"
+python -c "import torch; print(torch.cuda.get_device_name(0))"
+
+Expected successful output:
+---------------------------
+- CUDA available: True
+- CUDA version: 12.1
+- GPU name: NVIDIA L40S
+
+Important:
+----------
+If CUDA available is False on the GPU node, do not run training yet.
+Fix the PyTorch/CUDA installation first.
+
+
+Part M. Common CUDA Errors and Fixes
+====================================
+
+1. Error: old PyTorch environment on Python 3.6
+-----------------------------------------------
+Symptoms:
+- torchvision.tv_tensors missing
+- GPU architecture not supported
+- CUDA mismatch
+
+Fix:
+- stop using the old vision_env
+- use Miniconda + Python 3.10 + cu121 PyTorch
+
+2. Error: CUDA available False, driver too old
+----------------------------------------------
+Symptoms:
+- torch.version.cuda showed 13.0
+- error message said driver too old
+- torch.cuda.is_available() returned False
+
+Cause:
+- latest PyTorch build was too new for the cluster driver
+
+Fix:
+----
+pip uninstall -y torch torchvision torchaudio
+pip cache purge
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+3. Error: ModuleNotFoundError: No module named 'matplotlib'
+-----------------------------------------------------------
+Fix:
+----
+pip install matplotlib
+or
+pip install matplotlib numpy pillow tqdm
+
+4. Error: No module named torchvision.tv_tensors
+------------------------------------------------
+Cause:
+- old torchvision version
+
+Fix:
+- reinstall modern torch/torchvision in the conda environment
+- verify with:
+  python -c "from torchvision.tv_tensors import Image, BoundingBoxes, Mask; print('tv_tensors works')"
+
+
+Part N. Run a Small Interactive Test First
+==========================================
+
+Before using SLURM, run a short test manually on the GPU node.
+
+Train from scratch test:
+------------------------
+python train.py \
+  --data_dir PennFudanPed \
+  --output_dir outputs_maskrcnn_test \
+  --epochs 1 \
+  --batch_size 2 \
+  --lr 0.0005 \
+  --num_workers 2 \
+  --print_freq 5
+
+Optional pretrained test:
+-------------------------
+python train.py \
+  --data_dir PennFudanPed \
+  --output_dir outputs_maskrcnn_pretrained_test \
+  --epochs 1 \
+  --batch_size 2 \
+  --lr 0.0005 \
+  --num_workers 2 \
+  --print_freq 5 \
+  --use_pretrained
+
+Important:
+----------
+- The project is configured to train from scratch by default.
+- Use --use_pretrained only if you want COCO initialization and the weights are available.
+
+Recommendation:
+---------------
+For the first GPU test:
+- use num_workers=2
+- start with 1 epoch
+- if loss becomes unstable, reduce the learning rate
+
+
+Part O. NaN Loss Error: Why It Happened
+=======================================
+
+Observed behavior:
+------------------
+- loss started finite
+- then jumped to a huge value
+- then became nan
+
+Most likely reasons:
+--------------------
+1. Learning rate too high for from-scratch training
+2. Mask R-CNN is unstable from random initialization on a very small dataset
+3. Possible invalid boxes or masks in some batch
+
+Recommended fixes:
+------------------
+1. Reduce learning rate:
+   --lr 0.0005
+   or
+   --lr 0.0001
+
+2. Test a pretrained run once for comparison:
+   add --use_pretrained
+
+3. Add gradient clipping in utils.py after backward():
+   torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+
+4. Add non-finite loss checks in train_one_epoch()
+
+Example lower-LR scratch test:
+------------------------------
+python train.py \
+  --data_dir PennFudanPed \
+  --output_dir outputs_maskrcnn_test_lowlr \
+  --epochs 1 \
+  --batch_size 2 \
+  --lr 0.0005 \
+  --num_workers 2 \
+  --print_freq 5
+
+
+Part P. Expected Output Files
+=============================
+
+After a successful run, output folders such as outputs_maskrcnn_test may contain:
+
+1. last_checkpoint.pth
+   - checkpoint with model weights, optimizer state, epoch, losses
+
+2. loss_curve.png
+   - train/validation loss plot
+
+3. predictions/
+   - sample prediction images with boxes and masks overlaid
+
+
+Part Q. Submit the SLURM Batch Job
+==================================
+
+Updated run_train.slurm should use conda, not the old virtual environment.
+
+Example SLURM script:
+---------------------
+#!/bin/bash
+#SBATCH --job-name=maskrcnn_pf
+#SBATCH --output=maskrcnn_pf_%j.out
+#SBATCH --error=maskrcnn_pf_%j.err
+#SBATCH -p gpul40q
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=24G
+#SBATCH --time=08:00:00
+
+echo "Job started on $(hostname)"
+date
+
+cd ~/mask_R_CNN || exit 1
+
+source ~/.bashrc
+conda activate maskrcnn
+
+echo "Python path: $(which python)"
+python --version
+nvidia-smi
+
+python -c "import torch, torchvision; \
+print('torch:', torch.__version__); \
+print('torchvision:', torchvision.__version__); \
+print('cuda available:', torch.cuda.is_available()); \
+print('cuda version:', torch.version.cuda); \
+print('gpu name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU')"
+
+python train.py \
+    --data_dir PennFudanPed \
+    --output_dir outputs_maskrcnn \
+    --epochs 10 \
+    --batch_size 2 \
+    --lr 0.0005 \
+    --num_workers 2 \
+    --print_freq 5
+
+echo "Job finished"
+date
+
+Submit:
+-------
+sbatch run_train.slurm
+
+If needed type before the above line:
+-----------------------
+dos2unix run_train.slurm
+
+Check job queue:
+----------------
+squeue -u $USER
+
+Read output/error logs:
+-----------------------
+cat maskrcnn_pf_JOBID.out
+cat maskrcnn_pf_JOBID.err
+
+Monitor output live
+-----------------------
+tail -f maskrcnn_pf_JOBID.out
+Ctrl + C (to exist)
+
+Part R. Download Output Files Back to Local Computer
+====================================================
+
+Important:
+----------
+Run the following commands on the LOCAL machine, not on the HPC.
+
+Download loss curve:
+--------------------
+scp -O "hansapanirodrigo@login.cradle.utrgv.edu:/home/hansapanirodrigo/mask_R_CNN/outputs_maskrcnn_test/loss_curve.png" .
+
+Download predictions folder:
+----------------------------
+scp -O -r "hansapanirodrigo@login.cradle.utrgv.edu:/home/hansapanirodrigo/mask_R_CNN/outputs_maskrcnn_test/predictions" .
+
+Download checkpoint:
+--------------------
+scp -O "hansapanirodrigo@login.cradle.utrgv.edu:/home/hansapanirodrigo/mask_R_CNN/outputs_maskrcnn_test/last_checkpoint.pth" .
+
+
+Download everything at once
+--------------------
+scp -O -r "hansapanirodrigo@login.cradle.utrgv.edu:/home/hansapanirodrigo/mask_R_CNN/outputs_maskrcnn_test" .
+
+
+
+Why -O may be needed:
+---------------------
+On Windows OpenSSH, forcing legacy SCP mode with -O can help when standard scp behavior has authentication/transfer issues.
+
+Common download mistakes:
+-------------------------
+1. Running scp on the HPC instead of the local machine
+2. Forgetting the destination dot:
+   scp source .
+3. Typing the remote path without quotes in PowerShell if parsing becomes messy
+
+Alternative:
+------------
+Use WinSCP or SFTP if scp continues to be difficult on Windows.
+
+
+Part S. Quick Start Summary
+===========================
+
+1. Local machine:
+   scp project files to HPC
+
+2. HPC login:
+   ssh to login node
+
+3. Set up Miniconda:
+   install + source ~/.bashrc
+
+4. Create environment:
+   conda create -n maskrcnn python=3.10 -y
+   conda activate maskrcnn
+
+5. Install packages:
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+   pip install matplotlib numpy pillow tqdm
+
+6. Request GPU:
+   srun -p gpul40q --gres=gpu:1 --cpus-per-task=4 --mem=16G -t 01:00:00 --pty bash
+
+7. Verify GPU:
+   torch.cuda.is_available() should be True
+
+8. Run 1-epoch test:
+   python train.py ...
+
+9. If stable:
+   submit SLURM job with sbatch
+
+10. Download results locally:
+   scp -O "remote_file" .
+
+
+Part T. Final Notes
+===================
+
+- Use the conda environment named maskrcnn for all future runs.
+- Do not use the old Python 3.6-based vision_env.
+- Always test CUDA on a GPU node, not the login node.
+- If training from scratch becomes unstable, lower the learning rate.
+- For a first successful run, prioritize stability over speed:
+  batch_size=2, num_workers=2, low learning rate.

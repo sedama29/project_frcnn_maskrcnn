@@ -1,0 +1,328 @@
+(For this repo’s Faster R-CNN / Mask R-CNN jobs, use README.md plus run_frcnn.slurm / run_maskrcnn.slurm.
+ The MNIST example below is the official UTRGV pattern; the same Slurm ideas apply.)
+
+UTRGV HPC CLUSTER – COMPLETE RUN GUIDE
+Running PyTorch GPU Job using SLURM
+==========================================================
+
+FILES USED
+----------------------------------------------------------
+
+This workflow uses two files:
+
+1) slurm_mnist_hpc.sh
+   SLURM job submission script
+
+2) utrgv_hpc_testcode.py
+   PyTorch MNIST test program
+
+
+----------------------------------------------------------
+WHAT EACH FILE DOES
+----------------------------------------------------------
+
+FILE 1: slurm_mnist_hpc.sh
+
+This file is a SLURM batch script that:
+
+1) Requests GPU resources from the HPC scheduler
+2) Requests CPU cores for data loading
+3) Loads CUDA module
+4) Activates a Python / PyTorch environment
+5) Prints GPU diagnostics
+6) Runs the PyTorch test program
+
+Important SLURM directives in the script:
+
+#SBATCH -p gpua30q
+    Selects GPU partition
+
+#SBATCH --gres=gpu:1
+    Requests 1 GPU
+
+#SBATCH --cpus-per-task=2
+    Requests CPU threads for dataloading
+
+#SBATCH --time=01:00:00
+    Maximum job runtime
+
+
+FILE 2: utrgv_hpc_testcode.py
+
+This Python program performs a full GPU test:
+
+1) Prints PyTorch and CUDA diagnostics
+2) Detects available GPUs
+3) Prints CUDA_VISIBLE_DEVICES
+4) Runs nvidia-smi for GPU verification
+5) Downloads MNIST dataset
+6) Builds a small neural network
+7) Runs forward pass
+8) Trains model for 5 epochs
+9) Prints GPU memory usage
+10) Evaluates accuracy
+
+If CUDA is available the training runs on GPU.
+Otherwise it runs on CPU.
+
+
+----------------------------------------------------------
+STEP 1 – LOGIN TO UTRGV HPC
+----------------------------------------------------------
+
+Open terminal and connect via SSH:
+
+ssh username@login.cradle.utrgv.edu
+
+Example:
+
+ssh hansapanirodrigo@login.cradle.utrgv.edu
+
+
+If required connect VPN first.
+
+
+----------------------------------------------------------
+STEP 2 – CREATE WORK DIRECTORY
+----------------------------------------------------------
+
+mkdir ~/mnist_test
+cd ~/mnist_test
+
+
+----------------------------------------------------------
+STEP 3 – TRANSFER FILES FROM LOCAL COMPUTER
+----------------------------------------------------------
+
+From your local machine (NOT inside HPC):
+
+scp slurm_mnist_hpc.sh username@login.cradle.utrgv.edu:~/mnist_test
+scp utrgv_hpc_testcode.py username@login.cradle.utrgv.edu:~/mnist_test
+
+
+Or transfer a whole directory:
+
+scp -r project_directory username@login.cradle.utrgv.edu:~/
+
+
+----------------------------------------------------------
+STEP 4 – VERIFY FILES
+----------------------------------------------------------
+
+ls -l
+
+Expected output:
+
+slurm_mnist_hpc.sh
+utrgv_hpc_testcode.py
+
+----------------------------------------------------------
+STEP 4B – Helpful HPC Tips 
+----------------------------------------------------------
+Before submitting jobs, check your script:
+
+cat slurm_mnist_hpc.sh
+
+
+And verify GPU request lines like:
+
+#SBATCH --gres=gpu:1
+----------------------------------------------------------
+STEP 5 – FIX WINDOWS LINE ENDINGS
+----------------------------------------------------------
+
+If scripts were created on Windows they may contain CRLF line endings.
+
+Run:
+
+dos2unix slurm_mnist_hpc.sh
+
+
+Verify:
+
+file slurm_mnist_hpc.sh
+
+Correct output:
+
+ASCII text
+
+Incorrect output:
+
+ASCII text with CRLF line terminators
+
+
+----------------------------------------------------------
+STEP 6 – MAKE SCRIPT EXECUTABLE
+----------------------------------------------------------
+changes the file permissions so that the file can be executed as a program/script:
+
+chmod +x slurm_mnist_hpc.sh
+
+
+----------------------------------------------------------
+STEP 7 – CHECK AVAILABLE MODULES
+----------------------------------------------------------
+
+module avail
+
+Check CUDA versions:
+
+module avail cuda
+
+
+----------------------------------------------------------
+STEP 8 – SUBMIT THE JOB
+----------------------------------------------------------
+
+sbatch slurm_mnist_hpc.sh
+
+
+Example output:
+
+Submitted batch job 123456
+
+
+----------------------------------------------------------
+STEP 9 – CHECK JOB STATUS
+----------------------------------------------------------
+To see the jobs currently running or waiting in the queue:
+squeue -u username
+
+
+Possible states:
+
+PD  -> Pending
+R   -> Running
+CG  -> Completing
+CD  -> Completed
+
+To See Completed Jobs:
+sacct -u hansapanirodrigo
+----------------------------------------------------------
+STEP 10 – CHECK JOB OUTPUT
+----------------------------------------------------------
+
+After job starts:
+
+ls
+
+You should see:
+
+torchMNIST.out.<jobid>
+torchMNIST.err.<jobid>
+
+
+View output:
+
+cat torchMNIST.out.<jobid>
+
+Or watch live output:
+
+tail -f torchMNIST.out.<jobid>
+
+
+----------------------------------------------------------
+DEBUGGING COMMANDS
+----------------------------------------------------------
+
+Check queue:
+
+squeue
+
+Check your jobs:
+
+squeue -u username
+
+Check job details:
+
+scontrol show job <jobid>
+
+Check completed job statistics:
+
+sacct -j <jobid>
+
+Check GPU nodes:
+
+sinfo
+
+
+----------------------------------------------------------
+VERIFY GPU ALLOCATION
+----------------------------------------------------------
+
+Inside output logs look for:
+
+CUDA available: True
+
+GPU name
+
+Also check:
+
+nvidia-smi
+
+
+----------------------------------------------------------
+COMMON ERRORS AND FIXES
+----------------------------------------------------------
+
+ERROR: DOS line endings
+
+Fix:
+
+dos2unix slurm_mnist_hpc.sh
+
+
+ERROR: CUDA not available
+
+Check module:
+
+module load cuda
+
+
+ERROR: GPU not requested
+
+Ensure script contains:
+
+#SBATCH --gres=gpu:1
+
+
+ERROR: job stuck pending
+
+Check resources:
+
+squeue
+
+
+----------------------------------------------------------
+INTERACTIVE GPU TEST
+----------------------------------------------------------
+
+To test interactively:
+
+srun -p gpua30q --gres=gpu:1 -N1 --pty bash
+
+Then run:
+
+python utrgv_hpc_testcode.py
+
+
+----------------------------------------------------------
+BEST PRACTICES
+----------------------------------------------------------
+
+Do NOT run heavy computation on login nodes.
+
+Always use SLURM.
+
+Monitor disk space:
+
+df -h
+
+Check current directory:
+
+pwd
+
+
+----------------------------------------------------------
+END OF GUIDE
+----------------------------------------------------------

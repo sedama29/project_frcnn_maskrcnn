@@ -1,99 +1,187 @@
-# COCO Case Study 2 Starter
+# COCO Case Study — Faster R-CNN & Mask R-CNN (UTRGV Cradle)
 
-This project scaffold helps you complete:
-- Faster R-CNN object detection on a COCO subset
-- Mask R-CNN instance segmentation on the same subset
-- Training, evaluation, and result logging for your report
+Train on a **COCO subset** using **`scripts/train_frcnn.py`** and **`scripts/train_maskrcnn.py`**.  
+This README assumes you work on **Cradle** (`login.cradle.utrgv.edu`) with **Miniconda** (recommended by the course).
 
-## 1) Quick local setup (optional)
+**Extra docs in this repo**
 
-If you want to test on your own machine first:
+| File | What it is |
+|------|------------|
+| **`mask_rcnn_guide.txt`** | Professor’s HPC guide (Miniconda, **cu121** PyTorch, **`gpul40q`**, CUDA checks, NaN tips). Same practices; their `train.py` / Penn-Fudan names differ from this repo. |
+| **`guidelines.txt`** | General UTRGV Slurm tips (`dos2unix`, `sbatch`, **`gpua30q`** example). |
 
-```bash
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-# source .venv/bin/activate
-pip install --upgrade pip
-pip install torch torchvision torchaudio pycocotools pillow matplotlib tqdm
-```
+**GPU partition:** use **`gpul40q`** or **`gpua30q`** depending on your account—edit **`#SBATCH -p`** in **`run_frcnn.slurm`** and **`run_maskrcnn.slurm`**.
 
-## 2) Full cluster workflow (recommended)
+---
 
-This section is the end-to-end process for UTRGV/TACC-style clusters.
+## Fast path: you already have `data/` and `data/coco_subset/`
 
-### 2.1 Create project folders on cluster
+### 1) Layout check (must match)
 
-```bash
-mkdir -p ~/project_frcnn_maskrcnn/{data,scripts,outputs,logs}
-cd ~/project_frcnn_maskrcnn
-```
-
-### 2.2 Copy your code to cluster
-
-From your local machine, copy this repository contents:
-
-```bash
-scp -r /path/to/COCO/* your_username@cluster_host:~/project_frcnn_maskrcnn/
-```
-
-If your cluster requires a gateway/jump host, use your institution's SSH instructions.
-
-### 2.3 Create Python environment on cluster
-
-```bash
-module load python/3.10
-python -m venv vision_env
-source vision_env/bin/activate
-pip install --upgrade pip
-pip install torch torchvision torchaudio pycocotools pillow matplotlib tqdm
-```
-
-### 2.4 Where to download COCO data
-
-Download from official COCO 2017 URLs:
-- `http://images.cocodataset.org/zips/train2017.zip`
-- `http://images.cocodataset.org/zips/val2017.zip`
-- `http://images.cocodataset.org/annotations/annotations_trainval2017.zip`
-
-Download on cluster (if outbound internet is allowed):
-
-```bash
-cd ~/project_frcnn_maskrcnn/data
-wget http://images.cocodataset.org/zips/train2017.zip
-wget http://images.cocodataset.org/zips/val2017.zip
-wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
-```
-
-If cluster download is blocked, download locally and upload with `scp`.
-
-### 2.5 Extract data on cluster
-
-```bash
-cd ~/project_frcnn_maskrcnn/data
-mkdir -p coco
-unzip -q train2017.zip -d coco
-unzip -q val2017.zip -d coco
-unzip -q annotations_trainval2017.zip -d coco
-```
-
-Expected structure:
+Project root (example **`~/project_frcnn_maskrcnn`**) should look like:
 
 ```text
-~/project_frcnn_maskrcnn/data/coco/
-  train2017/
-  val2017/
-  annotations/
-    instances_train2017.json
-    instances_val2017.json
+project_frcnn_maskrcnn/
+  data/
+    coco_subset/
+      train2017/          ← many .jpg
+      val2017/
+      annotations/
+        instances_train2017_subset.json
+        instances_val2017_subset.json
+  scripts/
+  run_frcnn.slurm
+  run_maskrcnn.slurm
 ```
 
-### 2.6 Build required subset (3000 train / 500 val)
+Quick check on the server:
 
 ```bash
 cd ~/project_frcnn_maskrcnn
-source vision_env/bin/activate
+ls data/coco_subset/train2017 | head
+ls data/coco_subset/val2017 | head
+ls data/coco_subset/annotations/
+```
+
+If that is correct, **you do not need to download COCO or run `build_coco_subset.py`**.
+
+Training always uses **`--data_root data/coco_subset`**.
+
+---
+
+### 2) Log in
+
+```bash
+ssh YOUR_USERNAME@login.cradle.utrgv.edu
+cd ~/project_frcnn_maskrcnn
+```
+
+---
+
+### 3) Miniconda (install once if you do not have it)
+
+Skip if **`~/miniconda3`** already exists.
+
+```bash
+cd ~
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+# accept license, default install path, say yes to conda init
+source ~/.bashrc
+conda --version
+```
+
+**Conda Terms of Service error?** (from professor guide)
+
+```bash
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+```
+
+---
+
+### 4) Create the **`maskrcnn`** environment (Python 3.10)
+
+This matches **`mask_rcnn_guide.txt`** and the **`run_*.slurm`** scripts in this repo.
+
+```bash
+cd ~/project_frcnn_maskrcnn
+conda create -n maskrcnn python=3.10 -y
+source ~/.bashrc
+conda activate maskrcnn
+python --version
+```
+
+Expect **`Python 3.10.x`**.  
+**Do not use** the login node’s default **`python3`** (often **3.6**) for this project.
+
+---
+
+### 5) Install PyTorch (CUDA 12.1 wheels) + project packages
+
+On Cradle, **avoid** plain `pip install torch`—use the **cu121** index (see **`mask_rcnn_guide.txt`**):
+
+```bash
+conda activate maskrcnn
+pip install --upgrade pip setuptools wheel
+pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+pip cache purge 2>/dev/null || true
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install matplotlib numpy pillow tqdm pycocotools
+```
+
+**Package name is `matplotlib`** (not `matplotli`).
+
+---
+
+### 6) Test imports (login node is OK for this only)
+
+```bash
+conda activate maskrcnn
+python -c "import torch; print('torch', torch.__version__, 'CUDA build', torch.version.cuda)"
+python -c "import torchvision; print('torchvision', torchvision.__version__)"
+```
+
+**Real GPU check** must be on a **GPU node** (next step)—not the login node.
+
+---
+
+### 7) Interactive GPU check (recommended once)
+
+Pick a partition you are allowed to use (**`gpul40q`** or **`gpua30q`**):
+
+```bash
+srun -p gpul40q --gres=gpu:1 --cpus-per-task=4 --mem=16G -t 01:00:00 --pty bash
+# if that fails, try: -p gpua30q
+
+module load cuda/12.3
+nvidia-smi
+
+source ~/.bashrc
+conda activate maskrcnn
+python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no gpu')"
+```
+
+If **`CUDA available: False`**, fix PyTorch install (§10) before long training.
+
+---
+
+### 8) Submit training (Slurm)
+
+The repo’s **`run_frcnn.slurm`** / **`run_maskrcnn.slurm`** use **`conda activate maskrcnn`**.
+
+```bash
+cd ~/project_frcnn_maskrcnn
+conda activate maskrcnn
+dos2unix run_frcnn.slurm run_maskrcnn.slurm 2>/dev/null || true
+chmod +x run_frcnn.slurm run_maskrcnn.slurm
+mkdir -p logs
+
+sbatch run_frcnn.slurm
+# later:
+# sbatch run_maskrcnn.slurm
+```
+
+Monitor:
+
+```bash
+squeue -u $USER
+tail -f logs/frcnn_JOBID.out
+```
+
+**Outputs:** `outputs/frcnn/` or `outputs/maskrcnn/` → `metrics.json`, `best_model.pt`, `last_model.pt`.
+
+---
+
+## If you only have full COCO under `data/coco/` (no subset yet)
+
+1. You need **`data/coco/train2017`**, **`val2017`**, **`annotations/instances_*.json`** (see **`mask_rcnn_guide.txt`** / assignment for download—prefer compute node or `scp` for large zips).
+
+2. Build the assignment subset:
+
+```bash
+cd ~/project_frcnn_maskrcnn
+conda activate maskrcnn
 python scripts/build_coco_subset.py \
   --coco_root data/coco \
   --out_root data/coco_subset \
@@ -102,87 +190,17 @@ python scripts/build_coco_subset.py \
   --seed 42
 ```
 
-## 3) Run training on cluster with Slurm
+Then continue from **§8**.
 
-### 3.1 Faster R-CNN Slurm script
+---
 
-Create `run_frcnn.slurm`:
+## After training (same env)
 
 ```bash
-#!/bin/bash
-#SBATCH --job-name=frcnn_coco
-#SBATCH --output=logs/frcnn_%j.out
-#SBATCH --error=logs/frcnn_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-
 cd ~/project_frcnn_maskrcnn
-module load python/3.10
-source vision_env/bin/activate
+conda activate maskrcnn
 
-python scripts/train_frcnn.py \
-  --data_root data/coco_subset \
-  --epochs 10 \
-  --batch_size 2 \
-  --lr 0.005 \
-  --num_workers 2 \
-  --output_dir outputs/frcnn
-```
-
-Submit and monitor:
-
-```bash
-sbatch run_frcnn.slurm
-squeue -u your_username
-tail -f logs/frcnn_JOBID.out
-```
-
-### 3.2 Mask R-CNN Slurm script
-
-Create `run_maskrcnn.slurm`:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=maskrcnn_coco
-#SBATCH --output=logs/maskrcnn_%j.out
-#SBATCH --error=logs/maskrcnn_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-
-cd ~/project_frcnn_maskrcnn
-module load python/3.10
-source vision_env/bin/activate
-
-python scripts/train_maskrcnn.py \
-  --data_root data/coco_subset \
-  --epochs 10 \
-  --batch_size 2 \
-  --lr 0.005 \
-  --num_workers 2 \
-  --output_dir outputs/maskrcnn
-```
-
-Submit and monitor:
-
-```bash
-sbatch run_maskrcnn.slurm
-squeue -u your_username
-tail -f logs/maskrcnn_JOBID.out
-```
-
-## 4) Post-training analysis commands
-
-### 4.1 Generate report figures
-
-Faster R-CNN:
-
-```bash
+# Figures — Faster R-CNN
 python scripts/visualize_predictions.py \
   --data_root data/coco_subset \
   --model_type frcnn \
@@ -190,11 +208,8 @@ python scripts/visualize_predictions.py \
   --output_dir outputs/figures/frcnn \
   --num_images 8 \
   --score_thresh 0.5
-```
 
-Mask R-CNN:
-
-```bash
+# Figures — Mask R-CNN
 python scripts/visualize_predictions.py \
   --data_root data/coco_subset \
   --model_type maskrcnn \
@@ -202,11 +217,8 @@ python scripts/visualize_predictions.py \
   --output_dir outputs/figures/maskrcnn \
   --num_images 8 \
   --score_thresh 0.5
-```
 
-### 4.2 RPN proposal recall analysis (Part I-D)
-
-```bash
+# RPN proposal recall (Part I-D)
 python scripts/rpn_proposal_analysis.py \
   --data_root data/coco_subset \
   --ann_json data/coco_subset/annotations/instances_val2017_subset.json \
@@ -216,29 +228,52 @@ python scripts/rpn_proposal_analysis.py \
   --iou 0.5 0.7 0.9
 ```
 
-This writes `outputs/frcnn/rpn_recall.json` for:
-- Recall vs IoU threshold (0.5 / 0.7 / 0.9)
-- Recall vs number of proposals (100 / 300 / 1000)
+---
 
-## 5) What gets saved
+## Python version
 
-Each training script saves:
-- `outputs/frcnn/metrics.json` or `outputs/maskrcnn/metrics.json`
-- `best_model.pt` (best validation AP)
-- `last_model.pt` (last epoch checkpoint)
+| | |
+|--|--|
+| **Use on Cradle** | **Python 3.10** in conda env **`maskrcnn`** |
+| **Minimum** | 3.8+ (3.10 recommended) |
+| **Avoid** | Login-node **`python3`** at **3.6** for installs/training |
 
-## 6) Report checklist mapping to assignment
+---
 
-- Architecture explanation: backbone, FPN, RPN, anchors, RoI heads, RoI Align
-- Math formulation: `Lcls + Lbox (+ Lmask)` and Smooth L1 motivation
-- Quantitative tables: AP, AP50, AP75, APsmall/APmedium/APlarge
-- Proposal analysis: recall vs IoU and recall vs number of proposals
-- Qualitative examples: correct, FP, mislocalization, missed small objects
-- Tradeoff analysis: training time, memory, speed, AP gains
+## 10) Troubleshooting
 
-## 7) Practical cluster tips
+| Problem | What to do |
+|--------|------------|
+| **`Python.h` / `pycocotools` build error** | You are not in **3.10** conda env, or pip is compiling. Use **`conda activate maskrcnn`**, **`python --version`**, then **`pip install --upgrade pip setuptools wheel`** and reinstall **`pycocotools`**. Or: **`conda install -c conda-forge pycocotools`**. |
+| **`torch.cuda.is_available()` False on GPU node** | Reinstall torch with **§5** **`cu121`** line; try **`module load cuda/12.3`** or **`cuda/11.6`** to match **`module avail cuda`**. |
+| **Loss = NaN** | Lower **`--lr`** in the Slurm script (try **`0.0005`** or **`0.0001`**), **`--batch_size 1`**. See **`mask_rcnn_guide.txt` Part O**. |
+| **`module load python/3.10` missing** | Normal on Cradle—**ignore**; use **Miniconda** only. |
+| **Jobs pending forever** | Wrong partition; switch **`#SBATCH -p`** between **`gpul40q`** / **`gpua30q`** or ask the instructor. |
 
-- Start with `--epochs 1` first to validate paths and logs.
-- Use `batch_size 1` if GPU memory is tight.
-- Save and keep all Slurm logs for reproducibility in your report.
-- If `module load python/3.10` is unavailable, use the version your cluster provides.
+---
+
+## 11) Report checklist (assignment)
+
+- Architecture: backbone, FPN, RPN, anchors, RoI heads, RoI Align  
+- Losses: `Lcls + Lbox (+ Lmask)`, Smooth L1  
+- Tables: AP, AP50, AP75, APs / APm / APl  
+- RPN recall analysis; qualitative figures; tradeoffs (time, memory, accuracy)  
+- Slurm logs + how data/subset were produced  
+
+---
+
+## 12) Optional: local PC (not Cradle)
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+source .venv/bin/activate
+pip install --upgrade pip
+pip install torch torchvision torchaudio pycocotools pillow matplotlib tqdm
+```
+
+---
+
+## 13) Alternative: `venv` named `vision_env` (no conda)
+
+If you prefer **`~/miniconda3/bin/python3 -m venv vision_env`**: create the venv, **`source vision_env/bin/activate`**, run the same **§5** pip commands, and edit **`run_*.slurm`** to use **`source vision_env/bin/activate`** instead of **`conda activate maskrcnn`**.
