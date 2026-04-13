@@ -30,7 +30,12 @@ def load_model(model_type: str, ckpt: Path, device: torch.device):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Visualize detections/masks for report figures.")
     parser.add_argument("--data_root", type=Path, required=True)
-    parser.add_argument("--ann_json", type=Path, default=Path("coco_subset/annotations/instances_val2017_subset.json"))
+    parser.add_argument(
+        "--ann_json",
+        type=Path,
+        default=None,
+        help="COCO instances JSON (default: <data_root>/annotations/instances_val2017_subset.json)",
+    )
     parser.add_argument("--model_type", choices=["frcnn", "maskrcnn"], required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output_dir", type=Path, default=Path("outputs/figures"))
@@ -38,6 +43,8 @@ def main() -> None:
     parser.add_argument("--score_thresh", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+    if args.ann_json is None:
+        args.ann_json = args.data_root / "annotations" / "instances_val2017_subset.json"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(args.model_type, args.checkpoint, device)

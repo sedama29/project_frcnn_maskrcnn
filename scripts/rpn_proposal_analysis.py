@@ -49,12 +49,19 @@ def compute_recall(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze RPN proposal recall on COCO subset.")
     parser.add_argument("--data_root", type=Path, required=True)
-    parser.add_argument("--ann_json", type=Path, default=Path("coco_subset/annotations/instances_val2017_subset.json"))
+    parser.add_argument(
+        "--ann_json",
+        type=Path,
+        default=None,
+        help="COCO instances JSON (default: <data_root>/annotations/instances_val2017_subset.json)",
+    )
     parser.add_argument("--output_json", type=Path, default=Path("outputs/frcnn/rpn_recall.json"))
     parser.add_argument("--max_images", type=int, default=200)
     parser.add_argument("--topk", type=int, nargs="+", default=[100, 300, 1000])
     parser.add_argument("--iou", type=float, nargs="+", default=[0.5, 0.7, 0.9])
     args = parser.parse_args()
+    if args.ann_json is None:
+        args.ann_json = args.data_root / "annotations" / "instances_val2017_subset.json"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT).to(device)
